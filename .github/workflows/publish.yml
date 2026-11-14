@@ -50,7 +50,8 @@ jobs:
           set -euo pipefail
           npm pack --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/pack.json"
           tarball="$RUNNER_TEMP/$(jq -r '.[0].filename' "$RUNNER_TEMP/pack.json")"
-          tar -tzf "$tarball" | grep -Fxq 'package/dist/mtm-gh-runner'
+          tar -tzf "$tarball" | sort > "$RUNNER_TEMP/files.txt"
+          grep -Fxq 'package/dist/mtm-gh-runner' "$RUNNER_TEMP/files.txt"
           npm publish "$tarball" --access public --provenance --registry=https://registry.npmjs.org
       - name: Publish amd64 GHCR image
         env:
