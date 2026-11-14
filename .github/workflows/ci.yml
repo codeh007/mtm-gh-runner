@@ -45,4 +45,4 @@ jobs:
           image="ghcr.io/codeh007/mtm-gh-runner:$version"
           docker build --platform linux/amd64 --build-arg VERSION="$version" --tag "$image" .
           test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = linux/amd64
-          test "$(docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.version\"}}' "$image")" = "$version"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")" = "$version"
