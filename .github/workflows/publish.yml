@@ -35,7 +35,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets --no-deps -- -D warnings
-      - run: cargo install cargo-about --locked
+      - run: cargo install cargo-about --locked --features cli
       - run: npm run build
       - name: Pack and publish npm CLI
         env:

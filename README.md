@@ -36,7 +36,13 @@ Image tags match the Cargo and npm versions and are immutable. Build locally wit
 
 ## Development
 
-Requires Rust 1.90+, Cargo About, Node.js, and Docker.
+Requires Rust 1.90+, Node.js, and Docker. Install Cargo About with its CLI feature before building:
+
+```sh
+cargo install cargo-about --locked --features cli
+```
+
+Then run:
 
 ```sh
 cargo fmt --check
