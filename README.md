@@ -36,7 +36,7 @@ Image tags match the Cargo and npm versions and are immutable. Build locally wit
 
 ## Release
 
-The GitHub Actions publish workflow requires a granular npm access token with publish access to `mtm-gh-runner` and **Bypass 2FA** enabled. Store it as the repository Actions secret `NPM_TOKEN`. After setting the secret, push a `vX.Y.Z` tag that matches the Cargo and npm versions. The workflow publishes the npm package and then the matching amd64 GHCR image.
+The GitHub Actions publish workflow uses npm Trusted Publishing and GitHub OIDC; it does not require a long-lived npm token secret. Configure the npm package's Trusted Publisher for repository `codeh007/mtm-gh-runner` and workflow `.github/workflows/publish.yml`. Then push a `vX.Y.Z` tag that matches the Cargo and npm versions. The workflow publishes the npm package and then the matching amd64 GHCR image.
 
 ## Development
 
