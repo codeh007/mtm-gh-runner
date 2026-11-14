@@ -1,0 +1,31 @@
+{
+  "name": "mtm-gh-runner",
+  "version": "0.3.3",
+  "description": "GitHub Actions self-hosted runner launcher and image",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codeh007/mtm-gh-runner.git"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["glibc"],
+  "bin": {
+    "mtm-gh-runner": "dist/mtm-gh-runner"
+  },
+  "files": [
+    "dist/mtm-gh-runner",
+    "dist/THIRD_PARTY_LICENSES.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs build",
+    "prepack": "node scripts/build.mjs prepack",
+    "lint": "cargo fmt --check && cargo clippy --locked --all-targets --no-deps -- -D warnings && node --check scripts/build.mjs",
+    "typecheck": "cargo check --locked",
+    "test": "cargo test --locked",
+    "image": "version=$(cargo metadata --locked --no-deps --format-version 1 | node -p 'JSON.parse(require(\"node:fs\").readFileSync(0, \"utf8\")).packages[0].version'); docker build --platform linux/amd64 --build-arg VERSION=\"$version\" --tag ghcr.io/codeh007/mtm-gh-runner:\"$version\" ."
+  }
+}

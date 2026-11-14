@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+        with:
+          toolchain: 1.90.0
+          components: clippy, rustfmt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Check manifest versions
+        run: |
+          test "$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')" = "$(node -p 'require("./package.json").version')"
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets --no-deps -- -D warnings
+      - run: cargo check --locked
+      - run: cargo install cargo-about --locked
+      - run: npm run build
+      - name: Inspect npm package
+        run: |
+          npm pack --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/pack.json"
+          tarball="$RUNNER_TEMP/$(jq -r '.[0].filename' "$RUNNER_TEMP/pack.json")"
+          tar -tzf "$tarball" | sort > "$RUNNER_TEMP/files.txt"
+          grep -Fxq 'package/dist/mtm-gh-runner' "$RUNNER_TEMP/files.txt"
+          grep -Fxq 'package/dist/THIRD_PARTY_LICENSES.json' "$RUNNER_TEMP/files.txt"
+          prefix="$RUNNER_TEMP/npm-install"
+          npm install --global --prefix "$prefix" "$tarball" --ignore-scripts
+          test "$("$prefix/bin/mtm-gh-runner" --version)" = "mtm-gh-runner $(node -p 'require("./package.json").version')"
+      - name: Build amd64 runner image
+        run: |
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          image="ghcr.io/codeh007/mtm-gh-runner:$version"
+          docker build --platform linux/amd64 --build-arg VERSION="$version" --tag "$image" .
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.version\"}}' "$image")" = "$version"

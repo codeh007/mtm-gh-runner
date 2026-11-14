@@ -1,0 +1,16 @@
+[package]
+name = "mtm-gh-runner"
+version = "0.3.3"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+license = "MIT"
+description = "GitHub Actions self-hosted runner launcher and image"
+repository = "https://github.com/codeh007/mtm-gh-runner"
+
+[dependencies]
+ctrlc = { version = "3", features = ["termination"] }
+dotenvy = "0.15"
+
+[profile.release]
+strip = true
