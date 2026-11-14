@@ -34,6 +34,10 @@ docker pull ghcr.io/codeh007/mtm-gh-runner:0.3.3
 
 Image tags match the Cargo and npm versions and are immutable. Build locally with `npm run image`.
 
+## Release
+
+The GitHub Actions publish workflow requires an npm token with publish access to `mtm-gh-runner`, stored as the repository Actions secret `NPM_TOKEN`. After setting the secret, push a `vX.Y.Z` tag that matches the Cargo and npm versions. The workflow publishes the npm package and then the matching amd64 GHCR image.
+
 ## Development
 
 Requires Rust 1.90+, Node.js, and Docker. Install Cargo About with its CLI feature before building:
