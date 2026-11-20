@@ -1,6 +1,6 @@
 # mtm-gh-runner
 
-A Linux x86-64 runner launcher and GitHub Actions runner image. The npm package includes a glibc binary and does not support macOS, Windows, or other CPU architectures.
+A Linux x86-64 runner launcher and GitHub Actions runner image. The npm package requires glibc 2.35 or later.
 
 ## Install
 
@@ -29,7 +29,7 @@ The launcher uses the host `gh` credentials only to request just-in-time runner 
 The image contains the GitHub Actions runner and the toolchain used by gomtm workflows. The launcher starts it for one job at a time.
 
 ```sh
-docker pull ghcr.io/codeh007/mtm-gh-runner:0.3.4
+docker pull ghcr.io/codeh007/mtm-gh-runner:0.3.5
 ```
 
 Image tags match the Cargo and npm versions. Keep published tags available for callers pinned to an older version. Build locally with `npm run image`.
@@ -44,11 +44,10 @@ For the first npm release, wait for the workflow to verify the public image. Dow
 
 ```sh
 npm login --registry=https://registry.npmjs.org
-npm stage publish ./mtm-gh-runner-X.Y.Z.tgz --access public --registry=https://registry.npmjs.org
-npm stage approve '<stage-id>' --registry=https://registry.npmjs.org
+npm publish ./mtm-gh-runner-X.Y.Z.tgz --access public --registry=https://registry.npmjs.org
 ```
 
-Replace `X.Y.Z` with the release version and `<stage-id>` with the ID returned by `npm stage publish`. If you already staged the tarball, use its ID from `npm stage list mtm-gh-runner`. Complete the 2FA prompt to publish.
+Replace `X.Y.Z` with the release version. Complete the 2FA prompt to publish.
 
 Configure the package's [Trusted Publisher](https://docs.npmjs.com/trusted-publishers/) to allow `npm publish` from repository `codeh007/mtm-gh-runner` and workflow filename `publish.yml`. Leave the environment field blank. Later releases use GitHub OIDC without an npm token secret.
 
