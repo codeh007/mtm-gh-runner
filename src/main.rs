@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const IMAGE: &str = concat!("ghcr.io/codeh007/mtm-gh-runner:", env!("CARGO_PKG_VERSION"));
 const DIND: &str =
     "docker:29.3.0-dind@sha256:1ba18449911d01f477a3fc104123c85d677addc60701b14b3fcb5381f9c4a537";
+const DIND_SOCKET: &str = "--host=unix:///var/run/docker.sock";
 const PREFIX: &str = "mtm-gh-runner";
 const CPU_SHARES: &str = "512";
 const LOCK: &str = "/tmp/mtm-gh-runner.lock";
@@ -257,15 +258,17 @@ fn session(slot: usize, jit: &str) -> Result<()> {
             "2g",
             "--cpu-shares",
             CPU_SHARES,
+            "--volume",
+            &format!("{PREFIX}-docker-{slot}:/var/lib/docker"),
             DIND,
             "dockerd",
-            "--host=unix:///var/run/docker.sock",
+            DIND_SOCKET,
             "--host=tcp://127.0.0.1:2375",
             "--tls=false",
         ],
     )?;
     let ready = (0..60).any(|_| {
-        let up = quiet("docker", &["exec", &dind, "docker", "info"]);
+        let up = quiet("docker", &["exec", &dind, "docker", DIND_SOCKET, "info"]);
         if !up {
             sleep(Duration::from_secs(1));
         }
@@ -273,6 +276,28 @@ fn session(slot: usize, jit: &str) -> Result<()> {
     });
     if !ready {
         return Err("dind did not become ready".into());
+    }
+    let daemon = ["exec", &dind, "docker", DIND_SOCKET];
+    let cleanup: [(&[&str], &[&str]); 3] = [
+        (&["ps", "--all", "--quiet"], &["rm", "--force", "--volumes"]),
+        (&["volume", "ls", "--quiet"], &["volume", "rm"]),
+        (
+            &["network", "ls", "--quiet", "--filter=type=custom"],
+            &["network", "rm"],
+        ),
+    ];
+    for (list, remove) in cleanup {
+        let leftovers = capture("docker", daemon.into_iter().chain(list.iter().copied()))?;
+        if !leftovers.is_empty() {
+            capture(
+                "docker",
+                daemon
+                    .into_iter()
+                    .chain(remove.iter().copied())
+                    .chain(["--"])
+                    .chain(leftovers.lines()),
+            )?;
+        }
     }
     if STOPPING.load(Ordering::SeqCst) {
         return Ok(());

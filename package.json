@@ -1,6 +1,6 @@
 {
   "name": "mtm-gh-runner",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "GitHub Actions self-hosted runner launcher and image",
   "license": "MIT",
   "repository": {

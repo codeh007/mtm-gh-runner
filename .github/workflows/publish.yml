@@ -4,6 +4,10 @@ on:
   push:
     tags: [v*]
 
+concurrency:
+  group: standalone-release
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -14,6 +18,10 @@ jobs:
       contents: read
       id-token: write
       packages: write
+    env:
+      IMAGE_REPOSITORY: codeh007/mtm-gh-runner
+      IMAGE_CANDIDATE: mtm-gh-runner:release-candidate
+      NPM_REGISTRY: https://registry.npmjs.org
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
@@ -32,27 +40,138 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           test "$version" = "$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
           test "$version" = "$(node -p 'require("./package.json").version')"
+          revision="$(git rev-parse HEAD)"
+          {
+            printf 'VERSION=%s\nREVISION=%s\n' "$version" "$revision"
+            printf 'IMAGE=ghcr.io/%s:%s\n' "$IMAGE_REPOSITORY" "$version"
+            printf 'TARBALL=%s/mtm-gh-runner-%s.tgz\n' "$RUNNER_TEMP" "$version"
+          } >> "$GITHUB_ENV"
       - run: cargo fmt --check
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets --no-deps -- -D warnings
       - run: cargo install cargo-about --locked --features cli
       - run: npm run build
-      - name: Pack and publish npm CLI
-        env:
-          NPM_CONFIG_PROVENANCE: "true"
+      - name: Pack and test npm CLI
         run: |
           set -euo pipefail
           npm pack --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/pack.json"
-          tarball="$RUNNER_TEMP/$(jq -r '.[0].filename' "$RUNNER_TEMP/pack.json")"
-          tar -tzf "$tarball" | sort > "$RUNNER_TEMP/files.txt"
+          tar -tzf "$TARBALL" > "$RUNNER_TEMP/files.txt"
           grep -Fxq 'package/dist/mtm-gh-runner' "$RUNNER_TEMP/files.txt"
-          npm publish "$tarball" --access public --provenance --registry=https://registry.npmjs.org
-      - name: Publish amd64 GHCR image
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE_TAG: ${{ github.ref_name }}
+          grep -Fxq 'package/dist/THIRD_PARTY_LICENSES.json' "$RUNNER_TEMP/files.txt"
+          prefix="$RUNNER_TEMP/npm-install"
+          npm install --global --prefix "$prefix" "$TARBALL" --ignore-scripts
+          test "$("$prefix/bin/mtm-gh-runner" --version)" = "mtm-gh-runner $VERSION"
+      - name: Build and test amd64 image
         run: |
           set -euo pipefail
-          version="${IMAGE_TAG#v}"
-          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker buildx build --platform linux/amd64 --build-arg VERSION="$version" --tag "ghcr.io/codeh007/mtm-gh-runner:$version" --push .
+          docker buildx build --load --platform linux/amd64 --build-arg VERSION="$VERSION" \
+            --label "org.opencontainers.image.revision=$REVISION" --tag "$IMAGE_CANDIDATE" .
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_CANDIDATE")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE_CANDIDATE")" = "$VERSION"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_CANDIDATE")" = "$REVISION"
+          node_dir="$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")"
+          docker run --rm --entrypoint bash \
+            --mount "type=bind,source=$node_dir,target=/opt/smoke-node,readonly" \
+            "$IMAGE_CANDIDATE" -euc '
+              export PATH="/opt/smoke-node/bin:$PATH"
+              npm exec --yes --package=playwright@1.65.1 -- playwright install --only-shell chromium
+              npm exec --yes --package=playwright@1.65.1 -- playwright screenshot --browser chromium about:blank /tmp/chromium.png
+            '
+      - name: Check npm publication state
+        id: npm
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/npm-metadata.json"
+          status="$(curl --silent --show-error --retry 3 --max-time 30 \
+            --header 'Accept: application/vnd.npm.install-v1+json' \
+            --output "$metadata" --write-out '%{http_code}' "$NPM_REGISTRY/mtm-gh-runner")"
+          case "$status" in
+            404)
+              jq -e '.error == "Not found"' "$metadata" > /dev/null
+              state=bootstrap
+              ;;
+            200)
+              jq -e '.name == "mtm-gh-runner" and (.versions | type == "object")' "$metadata" > /dev/null
+              if jq -e --arg version "$VERSION" '.versions | has($version)' "$metadata" > /dev/null; then
+                integrity="$(jq -er '.[0].integrity | select(startswith("sha512-"))' "$RUNNER_TEMP/pack.json")"
+                if ! jq -e --arg version "$VERSION" --arg integrity "$integrity" \
+                    '.versions[$version].dist.integrity == $integrity' "$metadata" > /dev/null; then
+                  echo "::error::npm mtm-gh-runner@$VERSION differs from the checked tarball"
+                  exit 1
+                fi
+                state=published
+              elif jq -e '.versions | keys == ["0.0.0-stage"]' "$metadata" > /dev/null; then
+                state=bootstrap
+              else
+                state=publish
+              fi
+              ;;
+            *) echo "::error::npm registry returned HTTP $status"; exit 1 ;;
+          esac
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - name: Publish image only if the tag is absent
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_STATE: ${{ steps.npm.outputs.state }}
+        run: |
+          set -euo pipefail
+          token="$(curl --fail --silent --show-error --retry 3 --max-time 30 \
+            --user "$GITHUB_ACTOR:$GH_TOKEN" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:$IMAGE_REPOSITORY:pull" \
+            | jq -er '.token | select(type == "string" and length > 0)')"
+          manifest="$RUNNER_TEMP/ghcr-manifest.json"
+          status="$(curl --silent --show-error --retry 3 --max-time 30 \
+            --header "Authorization: Bearer $token" \
+            --header 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            --output "$manifest" --write-out '%{http_code}' \
+            "https://ghcr.io/v2/$IMAGE_REPOSITORY/manifests/$VERSION")"
+          case "$status" in
+            200) echo "Reusing existing image at $IMAGE" ;;
+            404)
+              jq -e '.errors | length > 0 and all(.code == "MANIFEST_UNKNOWN")' "$manifest" > /dev/null
+              if [[ "$NPM_STATE" == published ]]; then
+                echo "::error::npm mtm-gh-runner@$VERSION is already published but $IMAGE is missing"
+                exit 1
+              fi
+              push_config="$(mktemp -d)"
+              printf '%s\n' "$GH_TOKEN" | docker --config "$push_config" login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+              docker tag "$IMAGE_CANDIDATE" "$IMAGE"
+              docker --config "$push_config" push "$IMAGE"
+              echo 'pushed=true' >> "$GITHUB_OUTPUT"
+              ;;
+            *) echo "::error::GHCR manifest probe returned HTTP $status for $IMAGE"; exit 1 ;;
+          esac
+      - name: Verify public image and release identity
+        env:
+          IMAGE_PUSHED: ${{ steps.image.outputs.pushed }}
+        run: |
+          set -euo pipefail
+          anonymous_config="$(mktemp -d)"
+          printf '%s\n' '{"auths":{"ghcr.io":{}}}' > "$anonymous_config/config.json"
+          docker --config "$anonymous_config" pull --platform linux/amd64 "$IMAGE"
+          docker image inspect "$IMAGE" | jq -e --arg version "$VERSION" --arg revision "$REVISION" '
+            .[0] | .Os == "linux" and .Architecture == "amd64"
+            and .Config.Labels["org.opencontainers.image.version"] == $version
+            and .Config.Labels["org.opencontainers.image.revision"] == $revision
+          ' > /dev/null || { echo "::error::Public image $IMAGE does not match release $VERSION at $REVISION"; exit 1; }
+          if [[ "$IMAGE_PUSHED" == true ]]; then
+            test "$(docker image inspect --format '{{.Id}}' "$IMAGE")" = "$(docker image inspect --format '{{.Id}}' "$IMAGE_CANDIDATE")"
+          fi
+      - name: Upload CLI tarball for first publication
+        if: steps.npm.outputs.state == 'bootstrap'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-bootstrap-${{ github.ref_name }}-${{ github.run_attempt }}
+          path: ${{ env.TARBALL }}
+          if-no-files-found: error
+      - name: Report npm bootstrap required
+        if: steps.npm.outputs.state == 'bootstrap'
+        run: |
+          echo '::notice::The image is public. Stage and approve the CLI tarball from this run to finish the first npm release.'
+      - name: Publish npm CLI with Trusted Publishing
+        if: steps.npm.outputs.state == 'publish'
+        run: npm publish "$TARBALL" --access public --provenance --registry "$NPM_REGISTRY"
+      - name: Report npm version already published
+        if: steps.npm.outputs.state == 'published'
+        run: echo "npm mtm-gh-runner@$VERSION already matches the checked tarball"
