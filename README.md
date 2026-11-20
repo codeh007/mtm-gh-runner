@@ -29,14 +29,28 @@ The launcher uses the host `gh` credentials only to request just-in-time runner 
 The image contains the GitHub Actions runner and the toolchain used by gomtm workflows. The launcher starts it for one job at a time.
 
 ```sh
-docker pull ghcr.io/codeh007/mtm-gh-runner:0.3.3
+docker pull ghcr.io/codeh007/mtm-gh-runner:0.3.4
 ```
 
-Image tags match the Cargo and npm versions and are immutable. Build locally with `npm run image`.
+Image tags match the Cargo and npm versions. Keep published tags available for callers pinned to an older version. Build locally with `npm run image`.
 
 ## Release
 
-The GitHub Actions publish workflow uses npm Trusted Publishing and GitHub OIDC; it does not require a long-lived npm token secret. Configure the npm package's Trusted Publisher for repository `codeh007/mtm-gh-runner` and workflow `.github/workflows/publish.yml`. Then push a `vX.Y.Z` tag that matches the Cargo and npm versions. The workflow publishes the npm package and then the matching amd64 GHCR image.
+Keep the GHCR package public. If the standalone repository does not inherit write access, grant `codeh007/mtm-gh-runner` the **Write** role under [Manage Actions access](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#ensuring-workflow-access-to-your-package).
+
+Push one `vX.Y.Z` tag at a time. The tag must match the Cargo and npm versions. The [publish workflow](.github/workflows/publish.yml) builds and tests both candidates, publishes the amd64 image, and verifies that an anonymous pull matches the tag's commit before publishing to npm. A rerun reuses a matching image and skips npm publishing if the registry already has the same tarball integrity.
+
+For the first npm release, wait for the workflow to verify the public image. Download and extract the `npm-bootstrap-vX.Y.Z-<attempt>` artifact from that run. Use npm 11.20 or later and sign in with your 2FA-enabled maintainer account.
+
+```sh
+npm login --registry=https://registry.npmjs.org
+npm stage publish ./mtm-gh-runner-X.Y.Z.tgz --access public --registry=https://registry.npmjs.org
+npm stage approve '<stage-id>' --registry=https://registry.npmjs.org
+```
+
+Replace `X.Y.Z` with the release version and `<stage-id>` with the ID returned by `npm stage publish`. If you already staged the tarball, use its ID from `npm stage list mtm-gh-runner`. Complete the 2FA prompt to publish.
+
+Configure the package's [Trusted Publisher](https://docs.npmjs.com/trusted-publishers/) to allow `npm publish` from repository `codeh007/mtm-gh-runner` and workflow filename `publish.yml`. Leave the environment field blank. Later releases use GitHub OIDC without an npm token secret.
 
 ## Development
 
