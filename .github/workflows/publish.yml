@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
       id-token: write
@@ -168,7 +168,7 @@ jobs:
       - name: Report npm bootstrap required
         if: steps.npm.outputs.state == 'bootstrap'
         run: |
-          echo '::notice::The image is public. Stage and approve the CLI tarball from this run to finish the first npm release.'
+          echo '::notice::The image is public. Publish the CLI tarball from this run with a 2FA-enabled npm maintainer account.'
       - name: Publish npm CLI with Trusted Publishing
         if: steps.npm.outputs.state == 'publish'
         run: npm publish "$TARBALL" --access public --provenance --registry "$NPM_REGISTRY"
