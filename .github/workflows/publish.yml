@@ -67,6 +67,8 @@ jobs:
           docker buildx build --load --platform linux/amd64 --build-arg VERSION="$VERSION" \
             --label "org.opencontainers.image.revision=$REVISION" --tag "$IMAGE_CANDIDATE" .
           test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_CANDIDATE")" = linux/amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE_CANDIDATE")" = "$VERSION"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_CANDIDATE")" = "$REVISION"
           node_dir="$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")"
           docker run --rm --entrypoint bash \
             --mount "type=bind,source=$node_dir,target=/opt/smoke-node,readonly" \
