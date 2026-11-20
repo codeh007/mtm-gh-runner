@@ -40,16 +40,9 @@ Keep the GHCR package public. If the standalone repository does not inherit writ
 
 Push one `vX.Y.Z` tag at a time. The tag must match the Cargo and npm versions. The [publish workflow](.github/workflows/publish.yml) builds and tests both candidates, publishes the amd64 image, and verifies that an anonymous pull matches the tag's commit before publishing to npm. A rerun reuses a matching image and skips npm publishing if the registry already has the same tarball integrity.
 
-For the first npm release, wait for the workflow to verify the public image. Download and extract the `npm-bootstrap-vX.Y.Z-<attempt>` artifact from that run. Use npm 11.20 or later and sign in with your 2FA-enabled maintainer account.
+Set the `NPM_TOKEN` Actions secret to an unexpired [npm granular access token](https://docs.npmjs.com/creating-and-viewing-access-tokens/) with publish permission for `mtm-gh-runner` and **Bypass 2FA** enabled. Rotate it before expiry.
 
-```sh
-npm login --registry=https://registry.npmjs.org
-npm publish ./mtm-gh-runner-X.Y.Z.tgz --access public --registry=https://registry.npmjs.org
-```
-
-Replace `X.Y.Z` with the release version. Complete the 2FA prompt to publish.
-
-Configure the package's [Trusted Publisher](https://docs.npmjs.com/trusted-publishers/) to allow `npm publish` from repository `codeh007/mtm-gh-runner` and workflow filename `publish.yml`. Leave the environment field blank. Later releases use GitHub OIDC without an npm token secret.
+To publish the already-built `v0.3.5` package, run the publish workflow manually from `main` while the original release artifact is available. This does not rebuild or push its image. Use tags for subsequent releases.
 
 ## Development
 
