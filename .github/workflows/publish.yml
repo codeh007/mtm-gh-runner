@@ -3,6 +3,7 @@ name: publish
 on:
   push:
     tags: [v*]
+  workflow_dispatch:
 
 concurrency:
   group: standalone-release
@@ -13,10 +14,11 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-      id-token: write
+      actions: read
       packages: write
     env:
       IMAGE_REPOSITORY: codeh007/mtm-gh-runner
@@ -24,14 +26,19 @@ jobs:
       NPM_REGISTRY: https://registry.npmjs.org
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'push'
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+        if: github.event_name == 'push'
         with:
           toolchain: 1.90.0
           components: clippy, rustfmt
+          cache-key: ubuntu-22.04
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
       - name: Verify release versions
+        if: github.event_name == 'push'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -46,22 +53,46 @@ jobs:
             printf 'IMAGE=ghcr.io/%s:%s\n' "$IMAGE_REPOSITORY" "$version"
             printf 'TARBALL=%s/mtm-gh-runner-%s.tgz\n' "$RUNNER_TEMP" "$version"
           } >> "$GITHUB_ENV"
-      - run: cargo fmt --check
-      - run: cargo test --locked
-      - run: cargo clippy --locked --all-targets --no-deps -- -D warnings
-      - run: cargo install cargo-about --locked --features cli
-      - run: npm run build
-      - name: Pack and test npm CLI
+      - name: Build and pack tagged CLI
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
-          npm pack --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/pack.json"
+          cargo fmt --check
+          cargo test --locked
+          cargo clippy --locked --all-targets --no-deps -- -D warnings
+          cargo install cargo-about --locked --features cli
+          npm run build
+          npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Download the verified v0.3.5 release artifact
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/14596994324/zip" > release.zip
+          sha256sum --check <<'SUM'
+          d241b3a5d042368cccc4000ffc30cd94bf54cc05ccda37515e9daf0552b011ba  release.zip
+          SUM
+          unzip -p release.zip mtm-gh-runner-0.3.5.tgz > mtm-gh-runner-0.3.5.tgz
+          {
+            echo 'VERSION=0.3.5'
+            echo 'REVISION=bfaa13c016442b5840fc007510c3cda104703252'
+            echo "IMAGE=ghcr.io/$IMAGE_REPOSITORY:0.3.5"
+            echo "TARBALL=$RUNNER_TEMP/mtm-gh-runner-0.3.5.tgz"
+          } >> "$GITHUB_ENV"
+      - name: Test packed npm CLI
+        run: |
+          set -euo pipefail
           tar -tzf "$TARBALL" > "$RUNNER_TEMP/files.txt"
           grep -Fxq 'package/dist/mtm-gh-runner' "$RUNNER_TEMP/files.txt"
           grep -Fxq 'package/dist/THIRD_PARTY_LICENSES.json' "$RUNNER_TEMP/files.txt"
           prefix="$RUNNER_TEMP/npm-install"
           npm install --global --prefix "$prefix" "$TARBALL" --ignore-scripts
           test "$("$prefix/bin/mtm-gh-runner" --version)" = "mtm-gh-runner $VERSION"
+          echo "INTEGRITY=sha512-$(openssl dgst -sha512 -binary "$TARBALL" | openssl base64 -A)" >> "$GITHUB_ENV"
       - name: Build and test amd64 image
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           docker buildx build --load --platform linux/amd64 --build-arg VERSION="$VERSION" \
@@ -88,20 +119,17 @@ jobs:
           case "$status" in
             404)
               jq -e '.error == "Not found"' "$metadata" > /dev/null
-              state=bootstrap
+              state=publish
               ;;
             200)
               jq -e '.name == "mtm-gh-runner" and (.versions | type == "object")' "$metadata" > /dev/null
               if jq -e --arg version "$VERSION" '.versions | has($version)' "$metadata" > /dev/null; then
-                integrity="$(jq -er '.[0].integrity | select(startswith("sha512-"))' "$RUNNER_TEMP/pack.json")"
-                if ! jq -e --arg version "$VERSION" --arg integrity "$integrity" \
+                if ! jq -e --arg version "$VERSION" --arg integrity "$INTEGRITY" \
                     '.versions[$version].dist.integrity == $integrity' "$metadata" > /dev/null; then
                   echo "::error::npm mtm-gh-runner@$VERSION differs from the checked tarball"
                   exit 1
                 fi
                 state=published
-              elif jq -e '.versions | keys == ["0.0.0-stage"]' "$metadata" > /dev/null; then
-                state=bootstrap
               else
                 state=publish
               fi
@@ -110,6 +138,7 @@ jobs:
           esac
           echo "state=$state" >> "$GITHUB_OUTPUT"
       - name: Publish image only if the tag is absent
+        if: github.event_name == 'push'
         id: image
         env:
           GH_TOKEN: ${{ github.token }}
@@ -158,20 +187,22 @@ jobs:
           if [[ "$IMAGE_PUSHED" == true ]]; then
             test "$(docker image inspect --format '{{.Id}}' "$IMAGE")" = "$(docker image inspect --format '{{.Id}}' "$IMAGE_CANDIDATE")"
           fi
-      - name: Upload CLI tarball for first publication
-        if: steps.npm.outputs.state == 'bootstrap'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: npm-bootstrap-${{ github.ref_name }}-${{ github.run_attempt }}
-          path: ${{ env.TARBALL }}
-          if-no-files-found: error
-      - name: Report npm bootstrap required
-        if: steps.npm.outputs.state == 'bootstrap'
-        run: |
-          echo '::notice::The image is public. Publish the CLI tarball from this run with a 2FA-enabled npm maintainer account.'
-      - name: Publish npm CLI with Trusted Publishing
+      - name: Publish npm CLI
         if: steps.npm.outputs.state == 'publish'
-        run: npm publish "$TARBALL" --access public --provenance --registry "$NPM_REGISTRY"
-      - name: Report npm version already published
-        if: steps.npm.outputs.state == 'published'
-        run: echo "npm mtm-gh-runner@$VERSION already matches the checked tarball"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${NODE_AUTH_TOKEN:?Configure the NPM_TOKEN Actions secret}"
+          npm publish "$TARBALL" --access public --registry "$NPM_REGISTRY"
+      - name: Verify public npm install
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          export NPM_CONFIG_USERCONFIG=/dev/null
+          export NPM_CONFIG_CACHE="$RUNNER_TEMP/npm-public-cache"
+          package="mtm-gh-runner@$VERSION"
+          prefix="$RUNNER_TEMP/npm-public-install"
+          npm view "$package" dist.integrity --json --registry "$NPM_REGISTRY" | jq -e --arg expected "$INTEGRITY" '. == $expected'
+          npm install --global --prefix "$prefix" "$package" --ignore-scripts --registry "$NPM_REGISTRY"
+          test "$("$prefix/bin/mtm-gh-runner" --version)" = "mtm-gh-runner $VERSION"
